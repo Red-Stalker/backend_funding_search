@@ -174,24 +174,21 @@ async def get_funding_scan(
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
-    if exchanges:
-        exchange_list = [e.strip() for e in exchanges.split(",") if e.strip()]
-    else:
-        exchange_list = None  # means "all"
+    exchange_list = [e.strip() for e in exchanges.split(",") if e.strip()] if exchanges else None
 
-    # Try pre-computed cache first (instant, 0 SQL)
+    # Try pre-computed cache (works for ANY exchange combination, ~1ms)
     range_label = match_standard_range(start_ms, end_ms)
     if range_label:
         cached = get_precomputed(range_label, exchange_list)
         if cached:
             return cached
 
-    # Resolve exchange list if needed
+    # Resolve exchange list for on-demand computation
     if exchange_list is None:
         current = await get_all_current_rates()
         exchange_list = list(current["funding_rates"].keys())
 
-    # On-demand cache for custom ranges
+    # On-demand cache for custom date ranges
     round_5min = 300_000
     cache_key = f"{sorted(exchange_list)}:{start_ms // round_5min}:{end_ms // round_5min}"
 
@@ -199,7 +196,6 @@ async def get_funding_scan(
     if cached:
         return cached
 
-    # Compute fresh
     interval_map = {ex: 1 if ex == "drift" else 8 for ex in exchange_list}
     tickers = await get_bulk_scan(exchange_list, start_ms, end_ms, interval_map)
     result = {"tickers": tickers}
