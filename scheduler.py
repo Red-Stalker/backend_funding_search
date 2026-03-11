@@ -66,6 +66,13 @@ async def _run_collect_snapshots():
     except Exception as e:
         logger.error(f"Scheduled snapshot collection failed: {e}")
 
+    # Recompute scan cache after new data arrives
+    try:
+        from scan_cache import recompute_standard_scans
+        await recompute_standard_scans()
+    except Exception as e:
+        logger.error(f"Scan cache recompute failed: {e}")
+
 
 async def _run_deep_integrity():
     try:

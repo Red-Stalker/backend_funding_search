@@ -1,7 +1,6 @@
 import logging
 import asyncio
 import sys
-import time
 from contextlib import asynccontextmanager
 
 if sys.platform == "win32":
@@ -33,6 +32,9 @@ async def lifespan(app: FastAPI):
     # Start scheduler immediately so new data flows in
     start_scheduler()
     logger.info("Scheduler started")
+
+    # Pre-compute scan cache so first requests are instant
+    asyncio.create_task(_warmup_scan_cache())
 
     # Integrity check: fill data gaps from loris.tools (runs in background)
     if INTEGRITY_CHECK_ENABLED:
@@ -83,6 +85,15 @@ async def _startup_integrity():
         logger.error(f"Initial collection failed: {e}")
 
 
+async def _warmup_scan_cache():
+    """Pre-compute scan results at startup so first user requests are instant."""
+    try:
+        from scan_cache import recompute_standard_scans
+        await recompute_standard_scans()
+    except Exception as e:
+        logger.error(f"Scan cache warmup failed: {e}")
+
+
 async def _initial_load():
     """Background task for first-time data loading."""
     try:
@@ -102,10 +113,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- Scan cache ----------
-# Data updates every 60min, so 2min cache is safe and cuts load drastically.
-_scan_cache: dict[str, tuple[float, dict]] = {}   # key -> (expire_ts, result)
-SCAN_CACHE_TTL = 120  # seconds
 
 
 @app.get("/api/rates")
@@ -151,10 +158,11 @@ async def get_funding_scan(
     exchanges: str = Query("", description="Comma-separated exchange names (empty = all)"),
 ):
     """Batch scan: compute funding spread for ALL symbols in one request.
-    Returns {tickers: [{symbol, spread, minRate, maxRate, minEx, maxEx, rates, stability, smartScore}, ...]}
-    Cached for 2 minutes — data only changes hourly.
+    Pre-computed for standard ranges (1d/7d/30d) — instant response.
+    Custom ranges use on-demand cache (2min TTL).
     """
     from datetime import datetime, timezone
+    from scan_cache import match_standard_range, get_precomputed, get_ondemand, set_ondemand
 
     try:
         start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
@@ -169,31 +177,34 @@ async def get_funding_scan(
     if exchanges:
         exchange_list = [e.strip() for e in exchanges.split(",") if e.strip()]
     else:
+        exchange_list = None  # means "all"
+
+    # Try pre-computed cache first (instant, 0 SQL)
+    range_label = match_standard_range(start_ms, end_ms)
+    if range_label:
+        cached = get_precomputed(range_label, exchange_list)
+        if cached:
+            return cached
+
+    # Resolve exchange list if needed
+    if exchange_list is None:
         current = await get_all_current_rates()
         exchange_list = list(current["funding_rates"].keys())
 
-    # Round timestamps to 5-min so similar requests hit the same cache key
+    # On-demand cache for custom ranges
     round_5min = 300_000
     cache_key = f"{sorted(exchange_list)}:{start_ms // round_5min}:{end_ms // round_5min}"
 
-    now = time.time()
-    if cache_key in _scan_cache:
-        expire_ts, cached_result = _scan_cache[cache_key]
-        if now < expire_ts:
-            return cached_result
+    cached = get_ondemand(cache_key)
+    if cached:
+        return cached
 
-    # drift uses 1h interval, everything else 8h
+    # Compute fresh
     interval_map = {ex: 1 if ex == "drift" else 8 for ex in exchange_list}
-
     tickers = await get_bulk_scan(exchange_list, start_ms, end_ms, interval_map)
     result = {"tickers": tickers}
 
-    # Cache result & evict expired entries
-    _scan_cache[cache_key] = (now + SCAN_CACHE_TTL, result)
-    expired = [k for k, (exp, _) in _scan_cache.items() if now >= exp]
-    for k in expired:
-        del _scan_cache[k]
-
+    set_ondemand(cache_key, result)
     return result
 
 
