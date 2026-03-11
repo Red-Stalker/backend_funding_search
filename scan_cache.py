@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-STANDARD_RANGES = {"1d": 1, "7d": 7, "30d": 30}
+STANDARD_RANGES = {"1d": 1, "7d": 7, "14d": 14, "30d": 30}
 
 # Per-range raw stats: {range_label: RangeData}
 _range_data: dict[str, "RangeData"] = {}
