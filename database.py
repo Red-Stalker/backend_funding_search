@@ -25,6 +25,9 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_fr_symbol_ts
                 ON funding_rates(symbol, ts);
 
+            CREATE INDEX IF NOT EXISTS idx_fr_exchange_ts
+                ON funding_rates(exchange, ts);
+
             CREATE TABLE IF NOT EXISTS current_rates (
                 exchange TEXT NOT NULL,
                 symbol   TEXT NOT NULL,

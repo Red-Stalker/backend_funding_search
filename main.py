@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import sys
+import time
 from contextlib import asynccontextmanager
 
 if sys.platform == "win32":
@@ -101,6 +102,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------- Scan cache ----------
+# Data updates every 60min, so 2min cache is safe and cuts load drastically.
+_scan_cache: dict[str, tuple[float, dict]] = {}   # key -> (expire_ts, result)
+SCAN_CACHE_TTL = 120  # seconds
+
 
 @app.get("/api/rates")
 async def get_rates():
@@ -146,6 +152,7 @@ async def get_funding_scan(
 ):
     """Batch scan: compute funding spread for ALL symbols in one request.
     Returns {tickers: [{symbol, spread, minRate, maxRate, minEx, maxEx, rates, stability, smartScore}, ...]}
+    Cached for 2 minutes — data only changes hourly.
     """
     from datetime import datetime, timezone
 
@@ -162,15 +169,32 @@ async def get_funding_scan(
     if exchanges:
         exchange_list = [e.strip() for e in exchanges.split(",") if e.strip()]
     else:
-        # All exchanges from current_rates
         current = await get_all_current_rates()
         exchange_list = list(current["funding_rates"].keys())
+
+    # Round timestamps to 5-min so similar requests hit the same cache key
+    round_5min = 300_000
+    cache_key = f"{sorted(exchange_list)}:{start_ms // round_5min}:{end_ms // round_5min}"
+
+    now = time.time()
+    if cache_key in _scan_cache:
+        expire_ts, cached_result = _scan_cache[cache_key]
+        if now < expire_ts:
+            return cached_result
 
     # drift uses 1h interval, everything else 8h
     interval_map = {ex: 1 if ex == "drift" else 8 for ex in exchange_list}
 
     tickers = await get_bulk_scan(exchange_list, start_ms, end_ms, interval_map)
-    return {"tickers": tickers}
+    result = {"tickers": tickers}
+
+    # Cache result & evict expired entries
+    _scan_cache[cache_key] = (now + SCAN_CACHE_TTL, result)
+    expired = [k for k, (exp, _) in _scan_cache.items() if now >= exp]
+    for k in expired:
+        del _scan_cache[k]
+
+    return result
 
 
 @app.get("/api/status")
