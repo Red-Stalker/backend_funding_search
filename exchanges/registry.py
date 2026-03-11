@@ -31,7 +31,6 @@ from .base import BaseExchange
 
 # Dead/unreachable exchanges (removed):
 # Felix, Hyena, Kinetiq, TradeXYZ — domains unreachable as of 2026-03
-# ZeroOne (01exchange) — zo-mainnet.n1.xyz returning 502 as of 2026-03-10
 
 _EXCHANGE_CLASSES: list[type[BaseExchange]] = [
     Binance, Bybit, OKX, Bitget, GateIO, HTX, KuCoin, MEXC,
@@ -39,7 +38,7 @@ _EXCHANGE_CLASSES: list[type[BaseExchange]] = [
     Drift, Bluefin, Paradex, WoofiPro, Vest, GRVT, Lighter, Reya,
     Aster, EdgeX, Ethereal, Extended,
     Hibachi, Nado, Pacifica,
-    Variational,
+    Variational, ZeroOne,
 ]
 
 _instances: dict[str, BaseExchange] = {}
