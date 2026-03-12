@@ -52,7 +52,7 @@ async def _fetch_raw_stats(exchanges: list[str], start_ms: int, end_ms: int,
     span_ms = end_ms - start_ms
     total_hours = span_ms / 3_600_000
     edge_margin = span_ms * 0.15
-    min_count = max(5, int(total_hours / 16))
+    min_count = max(2, int(total_hours / 16))  # 8h exchange has 3 settlements/day
     min_density = 0.70
     peer_ratio = 0.25
     bucket_6h = 21_600_000

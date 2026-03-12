@@ -232,7 +232,7 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
     span_ms = end_ms - start_ms
     # Data must start within the first 15% and end within the last 15% of the window
     edge_margin = span_ms * 0.15
-    min_count = max(5, int(total_hours / 16))  # ~1 point per 16h minimum
+    min_count = max(2, int(total_hours / 16))  # 8h exchange has 3 settlements/day
     peer_ratio = 0.25          # must have >= 25% of best exchange's count per symbol
     min_density = 0.70         # must fill >= 70% of 6h buckets in the window
 
