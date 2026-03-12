@@ -20,8 +20,17 @@ class Lighter(BaseExchange):
                     symbols.append((symbol, str(market_id)))
         return symbols
 
-    # No batch funding endpoint - orderBooks doesn't include funding_rate.
-    # Falls back to per-symbol via fetch_funding_history.
+    async def fetch_current_rates_batch(self) -> list[tuple[str, float]]:
+        data = await self._get(f"{self._BASE}/api/v1/funding-rates")
+        rates = []
+        for item in data.get("funding_rates", []):
+            if item.get("exchange") != "lighter":
+                continue
+            symbol = item.get("symbol", "")
+            rate = float(item.get("rate", 0))
+            if symbol:
+                rates.append((symbol, self._to_bps(rate)))
+        return rates
 
     async def fetch_funding_history(self, raw_symbol: str, start_ms: int, end_ms: int) -> list[dict]:
         url = f"{self._BASE}/api/v1/fundings"
