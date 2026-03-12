@@ -125,28 +125,21 @@ async def get_all_current_rates() -> dict:
         await db.close()
 
 
-async def get_historical_rates(symbol: str, exchanges: list[str], start_ms: int, end_ms: int) -> dict:
-    """Returns {series: {exchange: [{t: ISO, y: rate_bps}, ...]}}
-    Auto-downsamples based on time range (always bucketed for cross-exchange alignment):
-      <= 1.5 days : 5 min buckets
-      <= 8 days   : 30 min buckets
-      else        : 60 min buckets
-    Forward-fills gaps up to 2h so all exchanges share a unified timeline.
+async def get_historical_rates(symbol: str, exchanges: list[str], start_ms: int, end_ms: int,
+                               interval_hours_map: dict[str, int] | None = None) -> dict:
+    """Returns {series: {exchange: [{t: ISO, y: rate_bps}, ...]}, settlements: {exchange: [ts_ms, ...]}}
+    Bucket size by range: 1h for <=7d, 4h for 14d/30d.
+    Forward-fills gaps up to 9h (covers 8h settlement intervals).
+    Includes settlement timestamps for chart markers.
     """
     from datetime import datetime, timezone
 
-    span_ms = end_ms - start_ms
-    span_days = span_ms / 86_400_000
-
-    # Always use buckets for timestamp alignment across exchanges
-    if span_days <= 1.5:
-        bucket_ms = 5 * 60_000    # 5 min
-    elif span_days <= 8:
-        bucket_ms = 30 * 60_000   # 30 min
+    span_days = (end_ms - start_ms) / 86_400_000
+    if span_days <= 8:
+        bucket_ms = 60 * 60_000      # 1h buckets for 1d/7d
     else:
-        bucket_ms = 60 * 60_000   # 60 min
-
-    max_gap_ms = 2 * 3_600_000  # forward-fill up to 2h (covers collector intervals only)
+        bucket_ms = 4 * 60 * 60_000  # 4h buckets for 14d/30d
+    max_gap_ms = 9 * 3_600_000  # forward-fill up to 9h (covers 8h settlement gaps)
 
     db = await get_db()
     try:
@@ -163,6 +156,16 @@ async def get_historical_rates(symbol: str, exchanges: list[str], start_ms: int,
             [symbol, *exchanges, start_ms, end_ms],
         )
         rows = await cursor.fetchall()
+
+        # Fetch real settlement timestamps for markers
+        settlement_cursor = await db.execute(
+            f"""SELECT exchange, ts FROM funding_rates
+                WHERE symbol = ? AND exchange IN ({placeholders})
+                AND ts >= ? AND ts <= ?
+                ORDER BY ts ASC""",
+            [symbol, *exchanges, start_ms, end_ms],
+        )
+        settlement_rows = await settlement_cursor.fetchall()
     finally:
         await db.close()
 
@@ -175,8 +178,15 @@ async def get_historical_rates(symbol: str, exchanges: list[str], start_ms: int,
             exchange_data[ex] = {}
         exchange_data[ex][ts] = row["rate"]
 
-    # Generate regular time grid (not just union of exchange timestamps)
-    # so gaps shared by ALL exchanges still get forward-filled
+    # Group settlement timestamps by exchange
+    settlements: dict[str, list[int]] = {}
+    for row in settlement_rows:
+        ex = row["exchange"]
+        if ex not in settlements:
+            settlements[ex] = []
+        settlements[ex].append(row["ts"])
+
+    # Generate regular time grid
     grid_start = (start_ms // bucket_ms) * bucket_ms
     grid = range(grid_start, end_ms + 1, bucket_ms)
 
@@ -202,7 +212,7 @@ async def get_historical_rates(symbol: str, exchanges: list[str], start_ms: int,
                 "y": round(last_rate, 6),
             })
 
-    return {"series": series}
+    return {"series": series, "settlements": settlements}
 
 
 async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
@@ -288,14 +298,20 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
         }
 
     # Pass 2: per-symbol relative filter — drop exchanges with << points vs best peer
+    # Normalize cnt by interval_h so 1h and 8h exchanges are comparable
     grouped: dict[str, dict[str, dict]] = {}
     for sym, ex_data in pre_grouped.items():
         if len(ex_data) < 2:
             continue
-        best_cnt = max(d["cnt"] for d in ex_data.values())
-        threshold = best_cnt * peer_ratio
+        # Normalize: a 1h exchange has 8x more points than 8h for same period
+        normalized = {
+            ex: d["cnt"] * (default_map.get(ex, 8) / 8)
+            for ex, d in ex_data.items()
+        }
+        best_norm = max(normalized.values())
+        threshold = best_norm * peer_ratio
         filtered = {
-            ex: d for ex, d in ex_data.items() if d["cnt"] >= threshold
+            ex: d for ex, d in ex_data.items() if normalized[ex] >= threshold
         }
         if len(filtered) >= 2:
             grouped[sym] = filtered

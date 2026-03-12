@@ -3,8 +3,8 @@ import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from config import SNAPSHOT_INTERVAL_MINUTES, DEEP_INTEGRITY_ENABLED, DEEP_INTEGRITY_INTERVAL_HOURS
-from collector import collect_snapshots, refresh_symbols
+from config import SNAPSHOT_INTERVAL_MINUTES, SETTLEMENT_INTERVAL_MINUTES, DEEP_INTEGRITY_ENABLED, DEEP_INTEGRITY_INTERVAL_HOURS
+from collector import collect_snapshots, collect_settlements, refresh_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,21 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Collect funding rate snapshots every N minutes (matches loris frequency)
+    # Collect predicted/current rates → current_rates only (for live dashboard)
     _scheduler.add_job(
         _run_collect_snapshots,
         trigger=IntervalTrigger(minutes=SNAPSHOT_INTERVAL_MINUTES),
         id="collect_snapshots",
         name="Collect funding rate snapshots",
+        replace_existing=True,
+    )
+
+    # Collect actual settlement rates → funding_rates (for history/scan)
+    _scheduler.add_job(
+        _run_collect_settlements,
+        trigger=IntervalTrigger(minutes=SETTLEMENT_INTERVAL_MINUTES),
+        id="collect_settlements",
+        name="Collect settlement rates",
         replace_existing=True,
     )
 
@@ -47,7 +56,7 @@ def start_scheduler():
         )
 
     _scheduler.start()
-    jobs = f"symbols every 6h, snapshots every {SNAPSHOT_INTERVAL_MINUTES}min"
+    jobs = f"symbols every 6h, snapshots every {SNAPSHOT_INTERVAL_MINUTES}min, settlements every {SETTLEMENT_INTERVAL_MINUTES}min"
     if DEEP_INTEGRITY_ENABLED:
         jobs += f", deep integrity every {DEEP_INTEGRITY_INTERVAL_HOURS}h"
     logger.info(f"Scheduler started: {jobs}")
@@ -66,7 +75,14 @@ async def _run_collect_snapshots():
     except Exception as e:
         logger.error(f"Scheduled snapshot collection failed: {e}")
 
-    # Recompute scan cache after new data arrives
+
+async def _run_collect_settlements():
+    try:
+        await collect_settlements()
+    except Exception as e:
+        logger.error(f"Scheduled settlement collection failed: {e}")
+
+    # Recompute scan cache after new settlement data arrives
     try:
         from scan_cache import recompute_standard_scans
         await recompute_standard_scans()

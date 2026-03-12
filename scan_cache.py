@@ -108,13 +108,18 @@ async def _fetch_raw_stats(exchanges: list[str], start_ms: int, end_ms: int,
         pre_grouped[sym][ex] = {"total_pct": total_pct, "stability": std_dev, "cnt": cnt}
 
     # Pass 2: peer ratio filter (against ALL exchanges, not just requested)
+    # Normalize cnt by interval_h so 1h and 8h exchanges are comparable
     result: dict[str, dict[str, dict]] = {}
     for sym, ex_data in pre_grouped.items():
         if len(ex_data) < 2:
             continue
-        best_cnt = max(d["cnt"] for d in ex_data.values())
-        threshold = best_cnt * peer_ratio
-        filtered = {ex: d for ex, d in ex_data.items() if d["cnt"] >= threshold}
+        normalized = {
+            ex: d["cnt"] * (interval_map.get(ex, 8) / 8)
+            for ex, d in ex_data.items()
+        }
+        best_norm = max(normalized.values())
+        threshold = best_norm * peer_ratio
+        filtered = {ex: d for ex, d in ex_data.items() if normalized[ex] >= threshold}
         if len(filtered) >= 2:
             result[sym] = filtered
 
@@ -179,7 +184,11 @@ async def recompute_standard_scans():
             logger.warning("scan_cache: no exchanges, skipping recompute")
             return
 
-        interval_map = {ex: 1 if ex == "drift" else 8 for ex in exchange_list}
+        from exchanges.registry import get_exchange as _get_ex
+        interval_map = {}
+        for ex_name in exchange_list:
+            ex_inst = _get_ex(ex_name)
+            interval_map[ex_name] = ex_inst.native_interval_hours if ex_inst else 8
         now = datetime.now(timezone.utc)
 
         for label, days in STANDARD_RANGES.items():

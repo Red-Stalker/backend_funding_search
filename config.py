@@ -18,11 +18,16 @@ REQUEST_DELAY = float(os.environ.get("REQUEST_DELAY", "0.15"))
 # Max concurrent exchange fetches during backfill
 BACKFILL_CONCURRENCY = int(os.environ.get("BACKFILL_CONCURRENCY", "3"))
 
-# Snapshot collection interval in minutes
-SNAPSHOT_INTERVAL_MINUTES = int(os.environ.get("SNAPSHOT_INTERVAL_MINUTES", "5"))
+# Snapshot collection interval in minutes (predicted rates → current_rates only)
+SNAPSHOT_INTERVAL_MINUTES = int(os.environ.get("SNAPSHOT_INTERVAL_MINUTES", "60"))
 
 # Max concurrent per-symbol requests during snapshot collection
 SNAPSHOT_CONCURRENCY = int(os.environ.get("SNAPSHOT_CONCURRENCY", "10"))
+
+# Settlement collection — fetches actual settlement rates into funding_rates
+SETTLEMENT_INTERVAL_MINUTES = int(os.environ.get("SETTLEMENT_INTERVAL_MINUTES", "60"))
+SETTLEMENT_CONCURRENCY = int(os.environ.get("SETTLEMENT_CONCURRENCY", "5"))
+SETTLEMENT_LOOKBACK_HOURS = int(os.environ.get("SETTLEMENT_LOOKBACK_HOURS", "12"))
 
 # Integrity check on startup — fill gaps from loris.tools
 INTEGRITY_CHECK_ENABLED = os.environ.get("INTEGRITY_CHECK", "true").lower() == "true"

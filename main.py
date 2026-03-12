@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import HOST, PORT, INTEGRITY_CHECK_ENABLED
 from database import init_db, get_all_current_rates, get_historical_rates, get_bulk_scan, get_db_stats
 from scheduler import start_scheduler, stop_scheduler
-from collector import collect_snapshots, refresh_symbols
+from collector import collect_snapshots, collect_settlements, refresh_symbols
 from exchanges.registry import close_all
 from integrity import check_and_fill_gaps, fill_coverage_gaps
 
@@ -148,7 +148,17 @@ async def get_funding_history(
     end_ms = int(end_dt.timestamp() * 1000)
     exchange_list = [e.strip() for e in exchanges.split(",") if e.strip()]
 
-    return await get_historical_rates(symbol, exchange_list, start_ms, end_ms)
+    # Build interval map from exchange instances
+    from exchanges.registry import get_exchange as _get_ex
+    interval_map = {}
+    for ex_name in exchange_list:
+        ex_inst = _get_ex(ex_name)
+        if ex_inst:
+            interval_map[ex_name] = ex_inst.native_interval_hours
+        else:
+            interval_map[ex_name] = 8
+
+    return await get_historical_rates(symbol, exchange_list, start_ms, end_ms, interval_map)
 
 
 @app.get("/api/scan")
@@ -196,7 +206,11 @@ async def get_funding_scan(
     if cached:
         return cached
 
-    interval_map = {ex: 1 if ex == "drift" else 8 for ex in exchange_list}
+    from exchanges.registry import get_exchange as _get_ex
+    interval_map = {}
+    for ex_name in exchange_list:
+        ex_inst = _get_ex(ex_name)
+        interval_map[ex_name] = ex_inst.native_interval_hours if ex_inst else 8
     tickers = await get_bulk_scan(exchange_list, start_ms, end_ms, interval_map)
     result = {"tickers": tickers}
 
