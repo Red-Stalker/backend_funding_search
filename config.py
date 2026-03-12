@@ -9,7 +9,7 @@ DB_PATH = os.environ.get("FUNDING_DB_PATH", str(BASE_DIR / "funding_v2.db"))
 # How many days back to fetch on backfill
 BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "60"))
 
-# Hourly collector fetches last N hours of data to catch any missed settlements
+# Collector fetches last N hours of data to catch any missed settlements
 COLLECTOR_LOOKBACK_HOURS = int(os.environ.get("COLLECTOR_LOOKBACK_HOURS", "24"))
 
 # Rate limit delay between per-symbol requests (seconds)
@@ -19,7 +19,7 @@ REQUEST_DELAY = float(os.environ.get("REQUEST_DELAY", "0.15"))
 BACKFILL_CONCURRENCY = int(os.environ.get("BACKFILL_CONCURRENCY", "3"))
 
 # Snapshot collection interval in minutes
-SNAPSHOT_INTERVAL_MINUTES = int(os.environ.get("SNAPSHOT_INTERVAL_MINUTES", "60"))
+SNAPSHOT_INTERVAL_MINUTES = int(os.environ.get("SNAPSHOT_INTERVAL_MINUTES", "5"))
 
 # Max concurrent per-symbol requests during snapshot collection
 SNAPSHOT_CONCURRENCY = int(os.environ.get("SNAPSHOT_CONCURRENCY", "10"))
