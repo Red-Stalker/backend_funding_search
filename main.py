@@ -14,7 +14,7 @@ from database import init_db, get_all_current_rates, get_historical_rates, get_b
 from scheduler import start_scheduler, stop_scheduler
 from collector import collect_snapshots, collect_settlements, refresh_symbols
 from exchanges.registry import close_all
-from integrity import check_and_fill_gaps, fill_coverage_gaps
+from integrity import fill_coverage_gaps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,19 +55,21 @@ async def lifespan(app: FastAPI):
 
 
 async def _startup_integrity():
-    """Background: check integrity and fill gaps, then run initial collection if needed."""
-    try:
-        await check_and_fill_gaps()
-    except Exception as e:
-        logger.error(f"Integrity check failed: {e}")
+    """Background: targeted gap fill + symbol refresh + initial snapshot."""
+    from database import get_global_latest_ts
+    import time
 
-    # Fast per-symbol gap fill from loris (catches gaps missed by exchange-level check)
-    try:
-        await fill_coverage_gaps(window_days=7)
-    except Exception as e:
-        logger.error(f"Coverage gap fill failed: {e}")
+    # 1. Check data freshness (info only)
+    latest_ts = await get_global_latest_ts()
+    if latest_ts is None:
+        logger.warning(
+            "Database is EMPTY. Run 'python loris_download.py --days 60' first"
+        )
+    else:
+        gap_hours = (int(time.time() * 1000) - latest_ts) / 3_600_000
+        logger.info(f"Data freshness: {gap_hours:.1f}h since last record")
 
-    # Always refresh symbols so per-symbol exchanges (paradex, lighter, etc.) work
+    # 2. Refresh symbols (needed for settlement collection)
     try:
         logger.info("Refreshing exchange symbols...")
         await refresh_symbols()
@@ -75,7 +77,13 @@ async def _startup_integrity():
     except Exception as e:
         logger.error(f"Symbol refresh failed: {e}")
 
-    # Run initial snapshot if needed
+    # 3. Targeted gap fill from loris (only symbols with < 85% coverage)
+    try:
+        await fill_coverage_gaps(window_days=7)
+    except Exception as e:
+        logger.error(f"Coverage gap fill failed: {e}")
+
+    # 4. Initial snapshot if DB is nearly empty
     try:
         current = await get_all_current_rates()
         if not current["symbols"] or len(current["symbols"]) < 10:
@@ -148,12 +156,12 @@ async def get_funding_history(
     end_ms = int(end_dt.timestamp() * 1000)
     exchange_list = [e.strip() for e in exchanges.split(",") if e.strip()]
 
-    # Build interval map from exchange instances
+    # Build storage interval map: 8 for all normalized exchanges, native for drift
     from exchanges.registry import get_exchange as _get_ex
     interval_map = {}
     for ex_name in exchange_list:
         ex_inst = _get_ex(ex_name)
-        if ex_inst:
+        if ex_inst and not ex_inst.normalize_to_8h:
             interval_map[ex_name] = ex_inst.native_interval_hours
         else:
             interval_map[ex_name] = 8
@@ -210,7 +218,10 @@ async def get_funding_scan(
     interval_map = {}
     for ex_name in exchange_list:
         ex_inst = _get_ex(ex_name)
-        interval_map[ex_name] = ex_inst.native_interval_hours if ex_inst else 8
+        if ex_inst and not ex_inst.normalize_to_8h:
+            interval_map[ex_name] = ex_inst.native_interval_hours
+        else:
+            interval_map[ex_name] = 8
     tickers = await get_bulk_scan(exchange_list, start_ms, end_ms, interval_map)
     result = {"tickers": tickers}
 

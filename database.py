@@ -230,11 +230,11 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
     total_hours = (end_ms - start_ms) / 3_600_000
 
     span_ms = end_ms - start_ms
-    # Data must start within the first 15% and end within the last 15% of the window
-    edge_margin = span_ms * 0.15
+    # Data must start within the first 10% and end within the last 10% of the window
+    edge_margin = span_ms * 0.10
     min_count = max(2, int(total_hours / 16))  # 8h exchange has 3 settlements/day
-    peer_ratio = 0.25          # must have >= 25% of best exchange's count per symbol
-    min_density = 0.70         # must fill >= 70% of 6h buckets in the window
+    peer_ratio = 0.10          # must have >= 10% of best exchange's count per symbol
+    min_density = 0.50         # must fill >= 50% of 6h buckets in the window
 
     db = await get_db()
     try:
@@ -278,9 +278,10 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
         if cnt < min_count:
             continue
 
-        # Filter 4: density — must have data in >= 60% of 6h time buckets
+        # Filter 4: density — must have data in >= 50% of 6h time buckets
         expected_buckets = max(1, span_ms // 21_600_000)
-        if row["filled_6h"] / expected_buckets < min_density:
+        density = row["filled_6h"] / expected_buckets
+        if density < min_density:
             continue
 
         interval_h = default_map.get(ex, 8)
@@ -295,23 +296,18 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
             pre_grouped[sym] = {}
         pre_grouped[sym][ex] = {
             "total_pct": total_pct, "stability": std_dev, "cnt": cnt,
+            "density": min(density, 1.0),
         }
 
     # Pass 2: per-symbol relative filter — drop exchanges with << points vs best peer
-    # Normalize cnt by interval_h so 1h and 8h exchanges are comparable
     grouped: dict[str, dict[str, dict]] = {}
     for sym, ex_data in pre_grouped.items():
         if len(ex_data) < 2:
             continue
-        # Normalize: a 1h exchange has 8x more points than 8h for same period
-        normalized = {
-            ex: d["cnt"] * (default_map.get(ex, 8) / 8)
-            for ex, d in ex_data.items()
-        }
-        best_norm = max(normalized.values())
-        threshold = best_norm * peer_ratio
+        best_cnt = max(d["cnt"] for d in ex_data.values())
+        threshold = best_cnt * peer_ratio
         filtered = {
-            ex: d for ex, d in ex_data.items() if normalized[ex] >= threshold
+            ex: d for ex, d in ex_data.items() if d["cnt"] >= threshold
         }
         if len(filtered) >= 2:
             grouped[sym] = filtered
@@ -331,6 +327,9 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
         )
         smart_score = spread / stability if stability > 0 else 0
 
+        coverage_min = ex_data.get(min_ex, {}).get("density", 1.0)
+        coverage_max = ex_data.get(max_ex, {}).get("density", 1.0)
+
         results.append({
             "symbol": sym,
             "spread": round(spread, 6),
@@ -341,6 +340,7 @@ async def get_bulk_scan(exchanges: list[str], start_ms: int, end_ms: int,
             "rates": {k: round(v, 6) for k, v in exchange_totals.items()},
             "stability": round(stability, 6),
             "smartScore": round(smart_score, 6),
+            "coverage": round(min(coverage_min, coverage_max), 2),
         })
 
     results.sort(key=lambda x: -x["spread"])

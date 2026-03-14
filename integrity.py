@@ -173,7 +173,7 @@ async def _fill_gaps_subprocess(empty_db: bool):
         '        gap_min = (now_ms - latest_ts) / 60000\n'
         '        logger.info(f"Filling {gap_min:.0f} min gap for {len(symbols)} symbols...")\n'
         '        total = 0\n'
-        '        sem = asyncio.Semaphore(3)\n'
+        '        sem = asyncio.Semaphore(10)\n'
         '        async def _fill(symbol):\n'
         '            nonlocal total\n'
         '            async with sem:\n'
@@ -193,7 +193,7 @@ async def _fill_gaps_subprocess(empty_db: bool):
         '                if rows:\n'
         '                    await upsert_funding_rates(rows)\n'
         '                    total += len(rows)\n'
-        '                await asyncio.sleep(0.3)\n'
+        '                await asyncio.sleep(0.1)\n'
         '        tasks = [asyncio.create_task(_fill(s)) for s in symbols]\n'
         '        await asyncio.gather(*tasks, return_exceptions=True)\n'
         '        await rebuild_current_rates()\n'
@@ -215,7 +215,7 @@ async def _fill_gaps_subprocess(empty_db: bool):
                 cwd=str(BACKEND_DIR),
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=900,
             )
 
         result = await asyncio.to_thread(_run_worker)
@@ -254,7 +254,7 @@ async def _fill_gaps_inline():
         end = datetime.now(timezone.utc)
 
         total_inserted = 0
-        sem = asyncio.Semaphore(3)
+        sem = asyncio.Semaphore(10)
 
         async def _fill_symbol(symbol: str):
             nonlocal total_inserted
@@ -279,7 +279,7 @@ async def _fill_gaps_inline():
                 if all_current:
                     await upsert_current_rates(all_current)
 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.1)
 
         tasks = [asyncio.create_task(_fill_symbol(sym)) for sym in symbols]
         await asyncio.gather(*tasks, return_exceptions=True)

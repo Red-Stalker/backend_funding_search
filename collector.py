@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 
-from config import REQUEST_DELAY, BACKFILL_CONCURRENCY, SNAPSHOT_CONCURRENCY, SETTLEMENT_CONCURRENCY, SETTLEMENT_LOOKBACK_HOURS
+from config import REQUEST_DELAY, BACKFILL_CONCURRENCY, SETTLEMENT_CONCURRENCY, SETTLEMENT_LOOKBACK_HOURS, SETTLEMENT_DELAY
 from database import upsert_funding_rates, upsert_current_rates, upsert_exchange_symbols, get_exchange_symbols, rebuild_current_rates
 from exchanges.registry import get_all_exchanges, get_exchange
 
@@ -32,7 +32,7 @@ async def collect_snapshots():
     """Snapshot job: fetch current/predicted funding rates from all exchanges.
     Writes ONLY to current_rates (for live dashboard).
     Does NOT write to funding_rates — settlements handle that.
-    Uses batch endpoints where available, falls back to per-symbol.
+    Uses batch endpoints only — exchanges without batch are updated by settlement job.
     All exchanges run concurrently."""
     logger.info("Starting snapshot collection...")
     now_ms = int(time.time() * 1000)
@@ -41,41 +41,12 @@ async def collect_snapshots():
 
     async def _collect_exchange(name: str, ex):
         try:
-            # Try batch endpoint first
             batch_rates = await ex.fetch_current_rates_batch()
             if batch_rates:
                 current_rows = [(name, sym, rate, now_ms) for sym, rate in batch_rates]
                 await upsert_current_rates(current_rows)
                 logger.info(f"[{name}] snapshot batch: {len(batch_rates)} rates")
-                return
-
-            # Fallback: per-symbol with limited concurrency
-            symbols = await get_exchange_symbols(name)
-            if not symbols:
-                return
-
-            sem = asyncio.Semaphore(3)
-            current_rows = []
-
-            async def _fetch_one(sym, raw_sym):
-                async with sem:
-                    try:
-                        rates = await ex.fetch_funding_history(raw_sym, now_ms - 3600_000, now_ms)
-                        if rates:
-                            latest = max(rates, key=lambda x: x["timestamp"])
-                            current_rows.append((name, sym, latest["rate"], now_ms))
-                    except Exception:
-                        pass
-                    await asyncio.sleep(REQUEST_DELAY)
-
-            tasks = [asyncio.create_task(_fetch_one(s, r)) for s, r in symbols]
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-            if current_rows:
-                await upsert_current_rates(current_rows)
-            if current_rows:
-                logger.info(f"[{name}] snapshot per-symbol: {len(current_rows)} rates")
-
+            # No per-symbol fallback — settlement job updates current_rates for exchanges without batch
         except Exception as e:
             logger.error(f"[{name}] snapshot failed: {e}")
 
@@ -121,7 +92,7 @@ async def collect_settlements():
                             current_rows.append((name, sym, latest["rate"], latest["timestamp"]))
                     except Exception:
                         pass
-                    await asyncio.sleep(REQUEST_DELAY)
+                    await asyncio.sleep(SETTLEMENT_DELAY)
 
             tasks = [asyncio.create_task(_fetch_one(s, r)) for s, r in symbols]
             await asyncio.gather(*tasks, return_exceptions=True)

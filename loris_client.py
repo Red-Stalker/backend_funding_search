@@ -17,6 +17,13 @@ LORIS_TO_OUR = {
     "huobi": "htx",
 }
 
+# Loris stores all rates as 8h-normalized BPS.
+# Exchanges with normalize_to_8h=False and native != 8h need denormalization.
+# Drift: stored as 1h BPS in our DB → divide loris 8h BPS by 8.
+_LORIS_DENORM_FACTOR = {
+    "drift": 8,
+}
+
 
 class LorisClient:
     """Client for loris.tools funding rate API."""
@@ -87,6 +94,9 @@ class LorisClient:
         result = {}
         for exchange, rates in data["funding_rates"].items():
             our_name = self._map_exchange(exchange)
+            divisor = _LORIS_DENORM_FACTOR.get(our_name)
+            if divisor:
+                rates = {sym: rate / divisor for sym, rate in rates.items()}
             result[our_name] = rates
         return result
 
@@ -110,6 +120,9 @@ class LorisClient:
         result = {}
         for exchange, points in data["series"].items():
             our_name = self._map_exchange(exchange)
+            divisor = _LORIS_DENORM_FACTOR.get(our_name)
+            if divisor:
+                points = [{"t": p["t"], "y": p["y"] / divisor} for p in points]
             result[our_name] = points
         return result
 

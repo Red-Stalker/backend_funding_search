@@ -9,25 +9,20 @@ DB_PATH = os.environ.get("FUNDING_DB_PATH", str(BASE_DIR / "funding_v2.db"))
 # How many days back to fetch on backfill
 BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "60"))
 
-# Collector fetches last N hours of data to catch any missed settlements
-COLLECTOR_LOOKBACK_HOURS = int(os.environ.get("COLLECTOR_LOOKBACK_HOURS", "24"))
-
 # Rate limit delay between per-symbol requests (seconds)
 REQUEST_DELAY = float(os.environ.get("REQUEST_DELAY", "0.15"))
 
-# Max concurrent exchange fetches during backfill
+# Backfill
 BACKFILL_CONCURRENCY = int(os.environ.get("BACKFILL_CONCURRENCY", "3"))
 
 # Snapshot collection interval in minutes (predicted rates → current_rates only)
 SNAPSHOT_INTERVAL_MINUTES = int(os.environ.get("SNAPSHOT_INTERVAL_MINUTES", "60"))
 
-# Max concurrent per-symbol requests during snapshot collection
-SNAPSHOT_CONCURRENCY = int(os.environ.get("SNAPSHOT_CONCURRENCY", "10"))
-
 # Settlement collection — fetches actual settlement rates into funding_rates
 SETTLEMENT_INTERVAL_MINUTES = int(os.environ.get("SETTLEMENT_INTERVAL_MINUTES", "60"))
-SETTLEMENT_CONCURRENCY = int(os.environ.get("SETTLEMENT_CONCURRENCY", "5"))
+SETTLEMENT_CONCURRENCY = int(os.environ.get("SETTLEMENT_CONCURRENCY", "3"))
 SETTLEMENT_LOOKBACK_HOURS = int(os.environ.get("SETTLEMENT_LOOKBACK_HOURS", "12"))
+SETTLEMENT_DELAY = float(os.environ.get("SETTLEMENT_DELAY", "0.30"))  # slower than backfill to avoid 429s
 
 # Integrity check on startup — fill gaps from loris.tools
 INTEGRITY_CHECK_ENABLED = os.environ.get("INTEGRITY_CHECK", "true").lower() == "true"

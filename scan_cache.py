@@ -51,10 +51,10 @@ async def _fetch_raw_stats(exchanges: list[str], start_ms: int, end_ms: int,
 
     span_ms = end_ms - start_ms
     total_hours = span_ms / 3_600_000
-    edge_margin = span_ms * 0.15
+    edge_margin = span_ms * 0.10
     min_count = max(2, int(total_hours / 16))  # 8h exchange has 3 settlements/day
-    min_density = 0.70
-    peer_ratio = 0.25
+    min_density = 0.50
+    peer_ratio = 0.10
     bucket_6h = 21_600_000
 
     db = await get_db()
@@ -103,23 +103,21 @@ async def _fetch_raw_stats(exchanges: list[str], start_ms: int, end_ms: int,
         variance = row["avg_rate_sq"] * scale * scale - (avg_rate * scale) ** 2
         std_dev = math.sqrt(max(0, variance))
 
+        density = row["filled_6h"] / expected_buckets
+
         if sym not in pre_grouped:
             pre_grouped[sym] = {}
-        pre_grouped[sym][ex] = {"total_pct": total_pct, "stability": std_dev, "cnt": cnt}
+        pre_grouped[sym][ex] = {"total_pct": total_pct, "stability": std_dev, "cnt": cnt,
+                                "density": min(density, 1.0)}
 
-    # Pass 2: peer ratio filter (against ALL exchanges, not just requested)
-    # Normalize cnt by interval_h so 1h and 8h exchanges are comparable
+    # Pass 2: peer ratio filter (raw count, no normalization)
     result: dict[str, dict[str, dict]] = {}
     for sym, ex_data in pre_grouped.items():
         if len(ex_data) < 2:
             continue
-        normalized = {
-            ex: d["cnt"] * (interval_map.get(ex, 8) / 8)
-            for ex, d in ex_data.items()
-        }
-        best_norm = max(normalized.values())
-        threshold = best_norm * peer_ratio
-        filtered = {ex: d for ex, d in ex_data.items() if normalized[ex] >= threshold}
+        best_cnt = max(d["cnt"] for d in ex_data.values())
+        threshold = best_cnt * peer_ratio
+        filtered = {ex: d for ex, d in ex_data.items() if d["cnt"] >= threshold}
         if len(filtered) >= 2:
             result[sym] = filtered
 
@@ -155,6 +153,9 @@ def _assemble_tickers(stats: dict, exchanges: list[str] | None = None) -> list[d
         )
         smart_score = spread / stability if stability > 0 else 0
 
+        coverage_min = filtered.get(min_ex, {}).get("density", 1.0)
+        coverage_max = filtered.get(max_ex, {}).get("density", 1.0)
+
         results.append({
             "symbol": sym,
             "spread": round(spread, 6),
@@ -165,6 +166,7 @@ def _assemble_tickers(stats: dict, exchanges: list[str] | None = None) -> list[d
             "rates": {k: round(v, 6) for k, v in exchange_totals.items()},
             "stability": round(stability, 6),
             "smartScore": round(smart_score, 6),
+            "coverage": round(min(coverage_min, coverage_max), 2),
         })
 
     results.sort(key=lambda x: -x["spread"])
@@ -188,7 +190,10 @@ async def recompute_standard_scans():
         interval_map = {}
         for ex_name in exchange_list:
             ex_inst = _get_ex(ex_name)
-            interval_map[ex_name] = ex_inst.native_interval_hours if ex_inst else 8
+            if ex_inst and not ex_inst.normalize_to_8h:
+                interval_map[ex_name] = ex_inst.native_interval_hours
+            else:
+                interval_map[ex_name] = 8
         now = datetime.now(timezone.utc)
 
         for label, days in STANDARD_RANGES.items():

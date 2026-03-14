@@ -37,9 +37,12 @@ def start_scheduler():
     )
 
     # Collect actual settlement rates → funding_rates (for history/scan)
+    # Offset by 30 min so settlements don't fire at the same time as snapshots (avoids 429s)
+    from datetime import datetime, timedelta
+    settlement_start = datetime.now() + timedelta(minutes=30)
     _scheduler.add_job(
         _run_collect_settlements,
-        trigger=IntervalTrigger(minutes=SETTLEMENT_INTERVAL_MINUTES),
+        trigger=IntervalTrigger(minutes=SETTLEMENT_INTERVAL_MINUTES, start_date=settlement_start),
         id="collect_settlements",
         name="Collect settlement rates",
         replace_existing=True,

@@ -2,9 +2,9 @@
 
 ## Изменения в API
 
-### `/api/funding/history` — новое поле `settlements`
+### `/api/funding/history` — поле `settlements`
 
-Ответ теперь включает `settlements` — объект с массивами timestamp (ms)
+Ответ включает `settlements` — объект с массивами timestamp (ms)
 реальных выплат фандинга для каждой биржи:
 
 ```json
@@ -19,12 +19,13 @@
 
 ### Бакеты
 
-Все таймфреймы (1d, 7d, 14d, 30d) теперь используют часовые бакеты.
-Для 8h бирж между settlement-ами идёт forward-fill (горизонтальная линия),
+- ≤7d — 1h бакеты
+- 14d/30d — 4h бакеты
+
+Для 8h бирж между settlement-ами идёт forward-fill (горизонтальная линия до 9h gap),
 что корректно — ставка постоянна между исполнениями.
 
-Рекомендация: использовать `type="stepAfter"` для `Line` в Recharts,
-чтобы визуально показать что ставка держится до следующего settlement.
+Рекомендация: использовать `type="stepAfter"` для `Line` в Recharts.
 
 ## Как отобразить на графике (Recharts)
 
@@ -68,7 +69,19 @@ import { ReferenceDot } from 'recharts';
 Вертикальные пунктирные линии показывают КОГДА произошёл settlement,
 а точки на линиях графика показывают КАКАЯ ставка была исполнена.
 
-## Снепшоты vs Settlements
+## Архитектура данных
 
-- **`current_rates`** — обновляется каждый час snapshot-ом. Содержит predicted/текущие ставки для live-дашборда.
+### Два job-а собирают данные:
+
+- **Snapshots** (каждые 60 мин): batch endpoints → `current_rates`. Для live dashboard. Только биржи с batch endpoint.
+- **Settlements** (каждые 60 мин, +30 мин offset): per-symbol `fetch_funding_history()` → `funding_rates` + `current_rates`. Реальные settlement timestamps от бирж.
+
+### Таблицы:
+
+- **`current_rates`** — обновляется обоими job-ами. Содержит predicted/текущие ставки для live-дашборда.
 - **`funding_rates`** — содержит ТОЛЬКО реальные settlement rates с настоящими timestamp от бирж. Используется для history/scan/APR.
+
+### Interval map в API:
+
+History endpoint передаёт **storage interval** (8 для нормализованных, native для drift).
+Это корректно для формул расчёта, т.к. данные в БД хранятся в 8h BPS.
