@@ -29,7 +29,7 @@ class Lighter(BaseExchange):
             symbol = item.get("symbol", "")
             rate = float(item.get("rate", 0))
             if symbol:
-                rates.append((symbol, self._to_bps(rate)))
+                rates.append((symbol, self._to_bps(-rate)))
         return rates
 
     async def fetch_funding_history(self, raw_symbol: str, start_ms: int, end_ms: int) -> list[dict]:
@@ -52,7 +52,7 @@ class Lighter(BaseExchange):
                     continue
                 # rate is percentage string like "0.0020" meaning 0.002%
                 rate_pct = float(item.get("rate", 0))
-                rate_decimal = rate_pct / 100
+                rate_decimal = -rate_pct / 100
                 all_rates.append({
                     "timestamp": ts,
                     "rate": self._to_bps(rate_decimal),
