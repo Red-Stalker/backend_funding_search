@@ -1,10 +1,15 @@
 import asyncio
 import logging
+import random
 from abc import ABC, abstractmethod
 
 import aiohttp
 
+from proxies import get_proxy
+
 logger = logging.getLogger(__name__)
+
+_MAX_PROXY_RETRIES = 3
 
 
 class BaseExchange(ABC):
@@ -34,27 +39,72 @@ class BaseExchange(ABC):
 
     async def _get(self, url: str, params: dict | None = None, headers: dict | None = None) -> dict | list:
         session = await self._get_session()
+        # First try: direct request
         try:
             async with session.get(url, params=params, headers=headers) as resp:
-                if resp.status == 429:
-                    logger.warning(f"[{self.name}] Rate limited on {url}")
-                    await asyncio.sleep(2)
-                    raise aiohttp.ClientError(f"Rate limited: {resp.status}")
-                resp.raise_for_status()
-                return await resp.json()
-        except Exception as e:
-            logger.error(f"[{self.name}] GET {url} failed: {e}")
+                if resp.status != 429:
+                    resp.raise_for_status()
+                    return await resp.json()
+        except aiohttp.ClientResponseError:
             raise
+        except Exception:
+            pass  # fall through to proxy retry on connection errors too
+
+        # 429 or connection error — retry via proxies
+        for attempt in range(_MAX_PROXY_RETRIES):
+            proxy = get_proxy()
+            if not proxy:
+                # No proxies available — wait and raise
+                logger.warning(f"[{self.name}] Rate limited on {url}, no proxies")
+                await asyncio.sleep(2)
+                raise aiohttp.ClientError(f"Rate limited: 429")
+            try:
+                wait = 1 + attempt + random.random()
+                await asyncio.sleep(wait)
+                async with session.get(url, params=params, headers=headers, proxy=proxy, ssl=False) as resp:
+                    if resp.status == 429:
+                        continue  # try next proxy
+                    resp.raise_for_status()
+                    return await resp.json()
+            except Exception:
+                continue
+
+        logger.warning(f"[{self.name}] Rate limited on {url} after {_MAX_PROXY_RETRIES} proxy retries")
+        raise aiohttp.ClientError(f"Rate limited: 429")
 
     async def _post(self, url: str, json_data: dict | None = None) -> dict | list:
         session = await self._get_session()
+        # First try: direct request
         try:
             async with session.post(url, json=json_data) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-        except Exception as e:
-            logger.error(f"[{self.name}] POST {url} failed: {e}")
+                if resp.status != 429:
+                    resp.raise_for_status()
+                    return await resp.json()
+        except aiohttp.ClientResponseError:
             raise
+        except Exception:
+            pass
+
+        # 429 or connection error — retry via proxies
+        for attempt in range(_MAX_PROXY_RETRIES):
+            proxy = get_proxy()
+            if not proxy:
+                logger.warning(f"[{self.name}] Rate limited on {url}, no proxies")
+                await asyncio.sleep(2)
+                raise aiohttp.ClientError(f"Rate limited: 429")
+            try:
+                wait = 1 + attempt + random.random()
+                await asyncio.sleep(wait)
+                async with session.post(url, json=json_data, proxy=proxy, ssl=False) as resp:
+                    if resp.status == 429:
+                        continue
+                    resp.raise_for_status()
+                    return await resp.json()
+            except Exception:
+                continue
+
+        logger.warning(f"[{self.name}] Rate limited on {url} after {_MAX_PROXY_RETRIES} proxy retries")
+        raise aiohttp.ClientError(f"Rate limited: 429")
 
     def _to_bps(self, rate_decimal: float, interval_hours: int | None = None) -> float:
         """Convert decimal funding rate to BPS for the API output.
